@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Conecta 3 por puntos: minimax con cutoff</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#eef1f4; --surface:#ffffff; --ink:#1b2330; --muted:#5b6676; --rule:#cfd6df;
+  --board:#233042; --hole:#dfe5ec; --x:#2f5bea; --o:#e0a526; --line:#ffffff; --focus:#e0a526;
+  color-scheme:light;
+  box-sizing:border-box;
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#121820; --surface:#1a222d; --ink:#e3e8ef; --muted:#9aa6b6; --rule:#2c3644;
+    --board:#2a3a52; --hole:#121820; --x:#6f8fff; --o:#f0b93a; --line:#ffffff; --focus:#f0b93a;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#121820; --surface:#1a222d; --ink:#e3e8ef; --muted:#9aa6b6; --rule:#2c3644;
+  --board:#2a3a52; --hole:#121820; --x:#6f8fff; --o:#f0b93a; --line:#ffffff; --focus:#f0b93a;
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:"Bricolage Grotesque",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:1rem; line-height:1.5;
+}
+.wrap{max-width:68rem; margin:0 auto; padding:1.75rem 1.25rem 3rem}
+header h1{
+  font-size:clamp(2.1rem,5.5vw,3.5rem); font-weight:800; letter-spacing:-0.025em;
+  line-height:1.02; margin:0 0 .6rem;
+}
+header p{max-width:42rem; margin:0; color:var(--muted)}
+.layout{
+  display:grid; grid-template-columns:minmax(0,25rem) minmax(0,1fr);
+  grid-template-areas:"play top" "play panel"; grid-template-rows:auto 1fr;
+  column-gap:2.75rem; margin-top:2rem; align-items:start;
+}
+.top{grid-area:top} .play{grid-area:play} .panel{grid-area:panel}
+@media (max-width:54rem){
+  .wrap{padding-top:1.25rem}
+  header h1{font-size:2rem}
+  header p{font-size:.95rem}
+  .layout{grid-template-columns:minmax(0,1fr); grid-template-areas:"top" "play" "panel"; column-gap:0; margin-top:1.25rem}
+  .layout .play{justify-self:center; max-width:min(25rem, calc((100svh - 15rem) * 0.82))}
+  .layout .score .side{padding:.5rem .85rem}
+  .layout .score .pts{font-size:2rem}
+  .layout .status{margin-bottom:.75rem}
+  .panel{margin-top:2rem}
+}
+
+/* tablero */
+.play{max-width:25rem; width:100%}
+.values{
+  display:grid; grid-template-columns:repeat(5,1fr); text-align:center;
+  font-variant-numeric:tabular-nums; font-weight:600; font-size:.95rem;
+  min-height:1.6rem; color:var(--muted); padding:0 .75rem; margin-bottom:.3rem;
+}
+.values span.best{color:var(--ink); text-decoration:underline; text-decoration-thickness:2px; text-underline-offset:4px}
+.board{background:var(--board); border-radius:18px; padding:.75rem}
+.grid{position:relative; display:grid; grid-template-columns:repeat(5,1fr); aspect-ratio:5/6}
+.col{
+  appearance:none; border:0; background:transparent; padding:0; margin:0;
+  display:flex; flex-direction:column-reverse; cursor:pointer; border-radius:12px;
+  font:inherit; color:inherit;
+}
+.col:hover:not(:disabled){background:rgba(255,255,255,.07)}
+.col:focus-visible{outline:3px solid var(--focus); outline-offset:2px}
+.col:disabled{cursor:default}
+.cell{flex:1; position:relative}
+.cell::before{content:""; position:absolute; inset:10%; border-radius:50%; background:var(--hole)}
+.piece{position:absolute; inset:10%; border-radius:50%}
+.piece.x{background:var(--x)}
+.piece.o{background:var(--o)}
+.piece.drop{animation:drop .38s cubic-bezier(.55,0,1,.45)}
+.piece.last::after{
+  content:""; position:absolute; left:38%; top:38%; width:24%; height:24%;
+  border-radius:50%; background:rgba(255,255,255,.85);
+}
+@keyframes drop{from{transform:translateY(calc(var(--fall) * -125%))} to{transform:none}}
+svg.lines{position:absolute; inset:0; width:100%; height:100%; pointer-events:none}
+svg.lines .under{stroke:rgba(0,0,0,.35); stroke-width:15; stroke-linecap:round}
+svg.lines .ln{stroke:var(--line); stroke-width:9; stroke-linecap:round}
+svg.lines .fresh{stroke-dasharray:1; stroke-dashoffset:1; animation:draw .45s .3s ease-out forwards}
+@keyframes draw{to{stroke-dashoffset:0}}
+.labels{display:grid; grid-template-columns:repeat(5,1fr); text-align:center; color:var(--muted); padding:.35rem .75rem 0; font-weight:600}
+
+/* panel */
+.score{display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin-bottom:1rem}
+.side{border:1px solid var(--rule); border-radius:12px; padding:.75rem 1rem; background:var(--surface)}
+.side.turn{border-color:var(--ink)}
+.side .who{display:flex; align-items:center; gap:.5rem; color:var(--muted); font-weight:600}
+.dot{width:.85rem; height:.85rem; border-radius:50%; display:inline-block}
+.dot.x{background:var(--x)} .dot.o{background:var(--o)}
+.side .pts{font-size:2.6rem; font-weight:800; line-height:1.1; font-variant-numeric:tabular-nums}
+.status{font-size:1.15rem; font-weight:600; margin:0 0 1.5rem; min-height:1.75rem}
+h2{font-size:1.2rem; font-weight:800; margin:0 0 .75rem; letter-spacing:-0.01em}
+.controls{display:grid; gap:1rem; margin-bottom:2rem}
+.controls label, .controls fieldset{display:grid; gap:.35rem}
+.controls fieldset{border:0; padding:0; margin:0}
+.controls legend{padding:0; margin-bottom:.35rem; font-weight:600}
+.controls .lbl{font-weight:600}
+.controls .check{display:flex; gap:.6rem; align-items:flex-start; font-weight:400}
+.controls .check input{margin-top:.3rem}
+.controls .opt{display:flex; gap:.6rem; align-items:flex-start}
+.controls .opt input{margin-top:.3rem}
+.opt small{display:block; color:var(--muted)}
+select, button.primary{
+  font:inherit; color:var(--ink); background:var(--surface);
+  border:1px solid var(--rule); border-radius:10px; padding:.5rem .75rem;
+}
+input[type=range]{width:100%; accent-color:var(--x)}
+input[type=radio], input[type=checkbox]{accent-color:var(--x); width:1rem; height:1rem}
+button.primary{background:var(--ink); color:var(--paper); border-color:var(--ink); font-weight:600; cursor:pointer; justify-self:start; padding:.6rem 1.1rem}
+button.primary:focus-visible, select:focus-visible, input:focus-visible{outline:3px solid var(--focus); outline-offset:2px}
+.analysis{border-top:1px solid var(--rule); padding-top:1.25rem; margin-bottom:2rem}
+.analysis dl{display:grid; grid-template-columns:auto 1fr; gap:.3rem 1.25rem; margin:0}
+.analysis dt{color:var(--muted)}
+.analysis dd{margin:0; font-weight:600; font-variant-numeric:tabular-nums}
+.analysis p{margin:0; color:var(--muted)}
+.bar{height:.5rem; background:var(--rule); border-radius:4px; overflow:hidden; margin-top:.75rem}
+.bar i{display:block; height:100%; background:var(--x)}
+details{border-top:1px solid var(--rule); padding-top:1rem}
+summary{cursor:pointer; font-weight:800; font-size:1.1rem}
+details p, details li{max-width:38rem}
+details ul{padding-left:1.2rem}
+.sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0)}
+@media (prefers-reduced-motion: reduce){
+  .piece.drop{animation:none}
+  svg.lines .fresh{animation:none; stroke-dashoffset:0}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Conecta 3 por puntos</h1>
+    <p>Elige una columna y tu ficha cae al fondo. Cada tres fichas tuyas en línea valen un punto. Cuando se llena el tablero, gana quien tenga más puntos.</p>
+  </header>
+
+  <div class="layout">
+    <section class="play" aria-label="Tablero">
+      <div class="values" id="values" aria-hidden="true"></div>
+      <div class="board">
+        <div class="grid" id="grid">
+          <svg class="lines" id="lines" viewBox="0 0 500 600" aria-hidden="true"></svg>
+        </div>
+      </div>
+      <div class="labels" aria-hidden="true"><span>a</span><span>b</span><span>c</span><span>d</span><span>e</span></div>
+    </section>
+
+    <div class="top">
+      <div class="score">
+        <div class="side" id="sideX"><div class="who"><span class="dot x"></span><span id="nameX">X (tú)</span></div><div class="pts" id="ptsX">0</div></div>
+        <div class="side" id="sideO"><div class="who"><span class="dot o"></span><span id="nameO">O (agente)</span></div><div class="pts" id="ptsO">0</div></div>
+      </div>
+      <p class="status" id="status" aria-live="polite"></p>
+    </div>
+
+    <section class="panel" aria-label="Ajustes y análisis">
+      <h2>Ajustes del agente</h2>
+      <div class="controls">
+        <label><span class="lbl">Juegas con</span>
+          <select id="side">
+            <option value="1">X, empiezas tú</option>
+            <option value="-1">O, empieza el agente</option>
+          </select>
+        </label>
+        <label><span class="lbl">Profundidad del cutoff: <output id="depthOut">4</output> jugadas</span>
+          <input type="range" id="depth" min="1" max="7" value="4">
+        </label>
+        <fieldset>
+          <legend>Función EVAL en el corte</legend>
+          <label class="opt"><input type="radio" name="eval" value="naive"><span>Ingenua<small>Solo la diferencia de puntos que ya hay en el tablero.</small></span></label>
+          <label class="opt"><input type="radio" name="eval" value="good" checked><span>Buena<small>Puntos actuales más líneas que todavía pueden completarse.</small></span></label>
+        </fieldset>
+        <label class="check"><input type="checkbox" id="order" checked><span>Explorar primero las columnas del centro (mejora la poda)</span></label>
+        <label class="check"><input type="checkbox" id="show"><span>Mostrar valores minimax sobre el tablero en tu turno</span></label>
+        <button class="primary" id="new">Nueva partida</button>
+      </div>
+
+      <div class="analysis" aria-live="polite">
+        <h2>Última decisión del agente</h2>
+        <div id="analysis"><p>Cuando el agente juegue, aquí verás qué valor le dio a cada columna y cuántos nodos expandió con y sin poda.</p></div>
+      </div>
+
+      <details>
+        <summary>Cómo funciona</summary>
+        <p>El agente decide con minimax y poda alfa-beta: mira solo unas cuantas jugadas hacia adelante (la profundidad del corte) y ahí estima qué tan buena es la posición con la función EVAL que tú eliges. Los valores se expresan siempre como puntos de X menos puntos de O. X es MAX y busca el valor más alto; O es MIN y busca el más bajo.</p>
+        <ul>
+          <li><strong>UTILITY</strong> en un tablero lleno: puntos de X − puntos de O.</li>
+          <li><strong>CUTOFF-TEST</strong>: se detiene la búsqueda al llegar a la profundidad elegida.</li>
+          <li><strong>EVAL ingenua</strong>: puntos de X − puntos de O en ese momento.</li>
+          <li><strong>EVAL buena</strong>: lo anterior + 0.3 por cada trío con dos fichas de X y la tercera casilla libre + 0.1 por cada trío con una ficha de X y dos libres, restando lo mismo para O.</li>
+        </ul>
+        <p>Con juego perfecto este tablero de 6 filas × 5 columnas termina en empate: lo verificamos resolviéndolo de forma exacta. Prueba bajar la profundidad a 2 con la EVAL buena y compárala con profundidad 4 y la EVAL ingenua.</p>
+      </details>
+    </section>
+  </div>
+</div>
+
+<script>
+(function(){
+  const R = 6, C = 5, N = R * C;
+  const COLS = "abcde";
+
+  /* ventanas de 3 casillas */
+  const WINS = [];
+  for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) {
+    for (const [dr, dc] of [[0,1],[1,0],[1,1],[1,-1]]) {
+      const cells = [];
+      for (let i = 0; i < 3; i++) {
+        const rr = r + i*dr, cc = c + i*dc;
+        if (rr < 0 || rr >= R || cc < 0 || cc >= C) { cells.length = 0; break; }
+        cells.push(rr*C + cc);
+      }
+      if (cells.length === 3) WINS.push(cells);
+    }
+  }
+  const CELLWIN = Array.from({length:N}, () => []);
+  WINS.forEach((w, k) => w.forEach(i => CELLWIN[i].push(k)));
+
+  /* estado del juego */
+  const b = new Int8Array(N), h = new Int8Array(C);
+  let sx = 0, so = 0, turn = 1, n = 0;
+
+  function play(c){
+    const i = h[c]*C + c, p = turn;
+    b[i] = p; h[c]++;
+    let g = 0;
+    for (const k of CELLWIN[i]) { const w = WINS[k]; if (b[w[0]] === p && b[w[1]] === p && b[w[2]] === p) g++; }
+    if (p === 1) sx += g; else so += g;
+    turn = -p; n++;
+    return g;
+  }
+  function undo(c, g){
+    h[c]--; const i = h[c]*C + c, p = b[i];
+    b[i] = 0;
+    if (p === 1) sx -= g; else so -= g;
+    turn = p; n--;
+  }
+
+  /* valores internos en décimas de punto, para evitar errores de redondeo */
+  function utility(){ return 10*(sx - so); }
+  function evalNaive(){ return 10*(sx - so); }
+  function evalGood(){
+    let v = 10*(sx - so);
+    for (const w of WINS) {
+      let x = 0, o = 0;
+      for (const i of w) { if (b[i] === 1) x++; else if (b[i] === -1) o++; }
+      if (x && o) continue;
+      if (x === 2) v += 3; else if (x === 1) v += 1;
+      if (o === 2) v -= 3; else if (o === 1) v -= 1;
+    }
+    return v;
+  }
+
+  let EVAL = evalGood, ORDER = [2,1,3,0,4], nodes = 0;
+  function moves(){ return ORDER.filter(c => h[c] < R); }
+
+  function alphabeta(d, a, bb){
+    nodes++;
+    if (n === N) return utility();
+    if (d === 0) return EVAL();
+    const ms = moves();
+    if (turn === 1) {
+      let v = -Infinity;
+      for (const c of ms) { const g = play(c); v = Math.max(v, alphabeta(d-1, a, bb)); undo(c, g); if (v >= bb) return v; a = Math.max(a, v); }
+      return v;
+    } else {
+      let v = Infinity;
+      for (const c of ms) { const g = play(c); v = Math.min(v, alphabeta(d-1, a, bb)); undo(c, g); if (v <= a) return v; bb = Math.min(bb, v); }
+      return v;
+    }
+  }
+  function minimax(d){
+    nodes++;
+    if (n === N) return utility();
+    if (d === 0) return EVAL();
+    const p = turn; let v = p === 1 ? -Infinity : Infinity;
+    for (const c of moves()) { const g = play(c); const s = minimax(d-1); undo(c, g); v = p === 1 ? Math.max(v, s) : Math.min(v, s); }
+    return v;
+  }
+  function rootAlphaBeta(d){
+    nodes++;
+    const p = turn; let a = -Infinity, bb = Infinity, best = p === 1 ? -Infinity : Infinity;
+    for (const c of moves()) {
+      const g = play(c); const v = alphabeta(d-1, a, bb); undo(c, g);
+      if (p === 1) { best = Math.max(best, v); a = Math.max(a, best); }
+      else { best = Math.min(best, v); bb = Math.min(bb, best); }
+    }
+    return best;
+  }
+  /* valor minimax exacto de cada columna (ventana completa por columna) */
+  function columnValues(d){
+    const vals = Array(C).fill(null);
+    for (let c = 0; c < C; c++) {
+      if (h[c] >= R) continue;
+      const g = play(c); vals[c] = alphabeta(d-1, -Infinity, Infinity); undo(c, g);
+    }
+    return vals;
+  }
+  function bestColumns(vals, p){
+    const legal = vals.map((v,c) => v === null ? null : c).filter(c => c !== null);
+    const target = p === 1 ? Math.max(...legal.map(c => vals[c])) : Math.min(...legal.map(c => vals[c]));
+    return legal.filter(c => vals[c] === target);
+  }
+  function decide(d){
+    const p = turn;
+    const t0 = performance.now();
+    const vals = columnValues(d);
+    nodes = 0; rootAlphaBeta(d); const abNodes = nodes;
+    nodes = 0; minimax(d); const mmNodes = nodes;
+    const ms = performance.now() - t0;
+    const options = bestColumns(vals, p);
+    const choice = options[Math.floor(Math.random()*options.length)];
+    return {vals, choice, abNodes, mmNodes, ms};
+  }
+
+  /* interfaz */
+  const $ = id => document.getElementById(id);
+  const grid = $("grid"), svg = $("lines"), valuesEl = $("values");
+  const colBtns = [], cellEls = [];
+  for (let c = 0; c < C; c++) {
+    const btn = document.createElement("button");
+    btn.className = "col"; btn.type = "button";
+    btn.addEventListener("click", () => humanMove(c));
+    for (let r = 0; r < R; r++) {
+      const cell = document.createElement("div"); cell.className = "cell";
+      btn.appendChild(cell); cellEls[r*C + c] = cell;
+    }
+    grid.insertBefore(btn, svg);
+    colBtns.push(btn);
+  }
+
+  let humanSide = 1, busy = false, lastCell = -1;
+  const fmt = v => (v > 0 ? "+" : v < 0 ? "−" : "") + (Math.abs(v)/10).toFixed(1);
+  const num = v => v.toLocaleString("es-MX");
+  const depth = () => +$("depth").value;
+
+  function drawPiece(i, p){
+    const r = Math.floor(i / C);
+    if (lastCell >= 0) { const prev = cellEls[lastCell].querySelector(".piece"); if (prev) prev.classList.remove("last"); }
+    const el = document.createElement("div");
+    el.className = "piece drop last " + (p === 1 ? "x" : "o");
+    el.style.setProperty("--fall", R - 1 - r);
+    cellEls[i].appendChild(el);
+    lastCell = i;
+  }
+  function center(i){ const r = Math.floor(i / C), c = i % C; return [c*100 + 50, (R-1-r)*100 + 50]; }
+  function drawLine(w){
+    const [x1,y1] = center(w[0]), [x2,y2] = center(w[2]);
+    const ns = "http://www.w3.org/2000/svg";
+    for (const cls of ["under", "ln"]) {
+      const l = document.createElementNS(ns, "line");
+      l.setAttribute("x1", x1); l.setAttribute("y1", y1); l.setAttribute("x2", x2); l.setAttribute("y2", y2);
+      l.setAttribute("pathLength", "1");
+      l.setAttribute("class", cls + " fresh");
+      svg.appendChild(l);
+    }
+  }
+  function doMove(c){
+    const i = h[c]*C + c, p = turn;
+    play(c);
+    drawPiece(i, p);
+    for (const k of CELLWIN[i]) { const w = WINS[k]; if (w.every(j => b[j] === p)) drawLine(w); }
+    updateBoardState();
+  }
+  function updateBoardState(){
+    $("ptsX").textContent = sx; $("ptsO").textContent = so;
+    $("sideX").classList.toggle("turn", n < N && turn === 1);
+    $("sideO").classList.toggle("turn", n < N && turn === -1);
+    for (let c = 0; c < C; c++) {
+      const free = R - h[c];
+      colBtns[c].disabled = busy || n === N || turn !== humanSide || free === 0;
+      colBtns[c].setAttribute("aria-label", `Columna ${COLS[c]}, ${free} ${free === 1 ? "casilla libre" : "casillas libres"}`);
+    }
+  }
+  function showValues(vals, p){
+    valuesEl.innerHTML = "";
+    const best = vals ? bestColumns(vals, p) : [];
+    for (let c = 0; c < C; c++) {
+      const s = document.createElement("span");
+      if (vals && vals[c] !== null) { s.textContent = fmt(vals[c]); if (best.includes(c)) s.className = "best"; }
+      valuesEl.appendChild(s);
+    }
+  }
+  function refreshHumanValues(){
+    if ($("show").checked && n < N && turn === humanSide && !busy) showValues(columnValues(depth()), turn);
+    else showValues(null);
+  }
+  function finish(){
+    const me = humanSide === 1 ? sx : so, ai = humanSide === 1 ? so : sx;
+    $("status").textContent = me > ai ? `Ganaste ${me} a ${ai}.` : me < ai ? `Ganó el agente ${ai} a ${me}.` : `Empate a ${me}.`;
+    showValues(null);
+  }
+  function afterMove(){
+    updateBoardState();
+    if (n === N) { finish(); return; }
+    if (turn !== humanSide) {
+      busy = true; updateBoardState();
+      $("status").textContent = "El agente está pensando…";
+      showValues(null);
+      setTimeout(agentMove, 450);
+    } else {
+      $("status").textContent = "Tu turno: elige una columna.";
+      refreshHumanValues();
+    }
+  }
+  function agentMove(){
+    const p = turn;
+    const r = decide(depth());
+    doMove(r.choice);
+    const saved = r.mmNodes ? Math.round(100*(1 - r.abNodes / r.mmNodes)) : 0;
+    const valList = r.vals.map((v,c) => v === null ? null : `${COLS[c]} ${fmt(v)}`).filter(Boolean).join(", ");
+    $("analysis").innerHTML = `
+      <dl>
+        <dt>Jugó en</dt><dd>columna ${COLS[r.choice]} (busca el valor ${p === 1 ? "más alto" : "más bajo"})</dd>
+        <dt>Valores por columna</dt><dd>${valList}</dd>
+        <dt>Nodos con alfa-beta</dt><dd>${num(r.abNodes)}</dd>
+        <dt>Nodos con minimax puro</dt><dd>${num(r.mmNodes)}</dd>
+        <dt>Trabajo evitado por la poda</dt><dd>${saved} %</dd>
+        <dt>Tiempo total</dt><dd>${r.ms < 1 ? "menos de 1" : Math.round(r.ms)} ms</dd>
+      </dl>
+      <div class="bar" aria-hidden="true"><i style="width:${Math.max(1, 100 - saved)}%"></i></div>`;
+    busy = false;
+    afterMove();
+  }
+  function humanMove(c){
+    if (busy || n === N || turn !== humanSide || h[c] >= R) return;
+    doMove(c);
+    afterMove();
+  }
+  function newGame(){
+    b.fill(0); h.fill(0); sx = so = 0; turn = 1; n = 0; lastCell = -1; busy = false;
+    cellEls.forEach(el => { const pc = el.querySelector(".piece"); if (pc) pc.remove(); });
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    humanSide = +$("side").value;
+    $("nameX").textContent = humanSide === 1 ? "X (tú)" : "X (agente)";
+    $("nameO").textContent = humanSide === -1 ? "O (tú)" : "O (agente)";
+    $("analysis").innerHTML = "<p>Cuando el agente juegue, aquí verás qué valor le dio a cada columna y cuántos nodos expandió con y sin poda.</p>";
+    afterMove();
+  }
+
+  $("new").addEventListener("click", newGame);
+  $("side").addEventListener("change", newGame);
+  $("depth").addEventListener("input", () => { $("depthOut").textContent = depth(); refreshHumanValues(); });
+  document.querySelectorAll('input[name="eval"]').forEach(r => r.addEventListener("change", () => {
+    EVAL = document.querySelector('input[name="eval"]:checked').value === "good" ? evalGood : evalNaive;
+    refreshHumanValues();
+  }));
+  $("order").addEventListener("change", e => { ORDER = e.target.checked ? [2,1,3,0,4] : [0,1,2,3,4]; });
+  $("show").addEventListener("change", refreshHumanValues);
+  document.addEventListener("keydown", e => {
+    if (e.target.closest && e.target.closest("select, input")) return;
+    const k = e.key.toLowerCase();
+    const c = "12345".includes(k) && k !== "" ? +k - 1 : COLS.indexOf(k);
+    if (c >= 0 && c < C && k.length === 1) humanMove(c);
+  });
+
+  newGame();
+})();
+</script>
+</body>
+</html>
